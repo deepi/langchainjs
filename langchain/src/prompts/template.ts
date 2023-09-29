@@ -1,10 +1,11 @@
+import handlebars from "handlebars";
 import { InputValues } from "../schema/index.js";
 
 /**
  * Type that specifies the format of a template. It can be either
  * "f-string" or "jinja2".
  */
-export type TemplateFormat = "f-string" | "jinja2";
+export type TemplateFormat = "f-string" | "jinja2" | "hbs";
 
 /**
  * Type that represents a node in a parsed format string. It can be either
@@ -76,6 +77,42 @@ export const interpolateFString = (template: string, values: InputValues) =>
     return res + node.text;
   }, "");
 
+export const parseHbs = (template: string): ParsedFStringNode[] => {
+  function extractNodes(node: hbs.AST.Node, results: ParsedFStringNode[]) {
+    if (node.type === "Program") {
+      for (const bodyNode of (node as hbs.AST.Program).body) {
+        extractNodes(bodyNode, results);
+      }
+    } else if (
+      node.type === "MustacheStatement" &&
+      (node as hbs.AST.MustacheStatement).path.type === "PathExpression"
+    ) {
+      results.push({
+        type: "variable",
+        name: (
+          (node as hbs.AST.MustacheStatement).path as hbs.AST.PathExpression
+        ).original,
+      });
+    } else if (node.type === "ContentStatement") {
+      results.push({
+        type: "literal",
+        text: (node as hbs.AST.ContentStatement).value,
+      });
+    } else if (node.type === "BlockStatement") {
+      for (const bodyNode of (node as hbs.AST.BlockStatement).program.body) {
+        extractNodes(bodyNode, results);
+      }
+    }
+    return results;
+  }
+  return extractNodes(handlebars.parse(template), []);
+};
+
+export const interpolateHbs = (
+  template: string,
+  values: Record<string, unknown>
+) => handlebars.compile(template)(values);
+
 /**
  * Type that represents a function that takes a template string and a set
  * of input values, and returns a string where all variables in the
@@ -92,11 +129,13 @@ type Parser = (template: string) => ParsedFStringNode[];
 export const DEFAULT_FORMATTER_MAPPING: Record<TemplateFormat, Interpolator> = {
   "f-string": interpolateFString,
   jinja2: (_: string, __: InputValues) => "",
+  hbs: interpolateHbs,
 };
 
 export const DEFAULT_PARSER_MAPPING: Record<TemplateFormat, Parser> = {
   "f-string": parseFString,
   jinja2: (_: string) => [],
+  hbs: parseHbs,
 };
 
 export const renderTemplate = (
